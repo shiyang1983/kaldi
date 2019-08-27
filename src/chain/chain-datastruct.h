@@ -44,6 +44,11 @@ extern "C" {
     int32_cuda hmm_state;  // source, or destination, HMM state.
   };
 
+  struct DenominatorGraphTransitionExt {
+    int32_cuda src_hmm_state;  // source HMM state.
+    int32_cuda tgt_hmm_state;  // tgt HMM state.
+  };
+
 
   // Search for this in chain-kernels.cu for an explanation.
   enum { kThresholdingPowerOfTwo = 14 };

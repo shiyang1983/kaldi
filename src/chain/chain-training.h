@@ -70,9 +70,12 @@ struct ChainTrainingOptions {
   // should have a softmax as its final nonlinearity.
   BaseFloat xent_regularize;
 
+  BaseFloat max_path_coefficient;
+
   ChainTrainingOptions(): l2_regularize(0.0), out_of_range_regularize(0.01),
                           leaky_hmm_coefficient(1.0e-05),
-                          xent_regularize(0.0) { }
+                          xent_regularize(0.0),
+                          max_path_coefficient(0.0) { }
 
   void Register(OptionsItf *opts) {
     opts->Register("l2-regularize", &l2_regularize, "l2 regularization "
@@ -88,6 +91,8 @@ struct ChainTrainingOptions {
                    "HMM state, to ensure gradual forgetting of context (can "
                    "improve generalization).  For numerical reasons, may not be "
                    "exactly zero.");
+    opts->Register("max-path-coefficient", &max_path_coefficient, "Coefficient "
+                   "the max path in denominator is added as a regularizer");
     opts->Register("xent-regularize", &xent_regularize, "Cross-entropy "
                    "regularization constant for 'chain' training.  If "
                    "nonzero, the network is expected to have an output "

@@ -103,12 +103,15 @@ __device__ inline void atomic_add_thresholded(Real* address, Real value) {
 __global__
 static void _cuda_chain_hmm_forward(const Int32Pair *backward_transitions,
                                     const DenominatorGraphTransition *transitions,
+                                    int32_cuda *max_transitions,
                                     int32_cuda num_sequences,
                                     int32_cuda num_hmm_states,
                                     const BaseFloat *probs,
                                     int32_cuda prob_stride,
                                     const BaseFloat *prev_alpha,
-                                    BaseFloat *this_alpha) {
+                                    BaseFloat *this_alpha,
+                                    const BaseFloat *prev_max_alpha,
+                                    BaseFloat *this_max_alpha) {
   // 'backward_transitions', indexed by hmm-state, consists of [start, end]
   // indexes into the 'transitions' array.  This gives us the info for
   // transitions *into* this state.  'probs' contains the exponentiated neural
@@ -126,6 +129,7 @@ static void _cuda_chain_hmm_forward(const Int32Pair *backward_transitions,
     return;
 
   double this_tot_alpha = 0.0;
+  double cur_max_alpha = 0.0;
   const DenominatorGraphTransition
       *trans_iter = transitions + backward_transitions[h].first,
       *trans_end = transitions + backward_transitions[h].second;
@@ -149,6 +153,24 @@ static void _cuda_chain_hmm_forward(const Int32Pair *backward_transitions,
 
     this_tot_alpha += this_prev_alpha0 * transition_prob0 * pseudo_loglike0 +
                        this_prev_alpha1 * transition_prob1 * pseudo_loglike1;
+    BaseFloat this_prev_max_alpha0 =
+      prev_max_alpha[prev_hmm_state0 * num_sequences + s];
+    BaseFloat this_max_alpha0 =
+      this_prev_max_alpha0 * transition_prob0 * pseudo_loglike0;
+    BaseFloat this_prev_max_alpha1 =
+      prev_max_alpha[prev_hmm_state1 * num_sequences + s];
+    BaseFloat this_max_alpha1 =
+      this_prev_max_alpha1 * transition_prob0 * pseudo_loglike0;
+
+    if (cur_max_alpha < this_max_alpha0) {
+      cur_max_alpha = this_max_alpha0;
+      max_transitions[h * num_sequences + s] = prev_hmm_state0;
+    }
+
+    if (cur_max_alpha < this_max_alpha1) {
+      cur_max_alpha = this_max_alpha1;
+      max_transitions[h * num_sequences + s] = prev_hmm_state1;
+    }
   }
   if (trans_iter != trans_end) {
     // mop up the odd transition.
@@ -158,6 +180,14 @@ static void _cuda_chain_hmm_forward(const Int32Pair *backward_transitions,
     BaseFloat pseudo_loglike0 = probs[pdf_id0 * prob_stride + s],
              this_prev_alpha0 = prev_alpha[prev_hmm_state0 * num_sequences + s];
     this_tot_alpha += this_prev_alpha0 * transition_prob0 * pseudo_loglike0;
+    BaseFloat this_prev_max_alpha0 =
+      prev_max_alpha[prev_hmm_state0 * num_sequences + s];
+    BaseFloat this_max_alpha0 = this_prev_max_alpha0 * transition_prob0 * pseudo_loglike0;
+    if (cur_max_alpha < this_max_alpha0) {
+      cur_max_alpha = this_max_alpha0;
+      max_transitions[h * num_sequences + s] = prev_hmm_state0;
+    }
+
   }
 
   // Let arbitrary_scale be the inverse of the sum of all alpha values on-- the
@@ -172,6 +202,7 @@ static void _cuda_chain_hmm_forward(const Int32Pair *backward_transitions,
   BaseFloat arbitrary_scale =
       1.0 / prev_alpha[num_hmm_states * num_sequences + s];
   this_alpha[h * num_sequences + s] = this_tot_alpha * arbitrary_scale;
+  this_max_alpha[h * num_sequences +s] = cur_max_alpha * arbitrary_scale;
 }
 
 
@@ -182,7 +213,10 @@ static void _cuda_chain_hmm_backward(const Int32Pair *forward_transitions,
                                      const BaseFloat *probs, int32_cuda prob_stride,
                                      const BaseFloat *this_alpha, const BaseFloat *next_beta,
                                      BaseFloat *this_beta, BaseFloat *log_prob_deriv,
-                                     int32_cuda log_prob_deriv_stride) {
+                                     int32_cuda log_prob_deriv_stride,
+                                     int32_cuda* next_max_index,
+                                     const int32_cuda* next_max_transitions,
+                                     BaseFloat max_path_coefficient) {
   // 'forward_transitions', indexed by hmm-state, consists of [start, end]
   // indexes into the 'transition_info' array.  This is about the transitions
   // *out of* this state.  'probs' contains the exponentiated neural net
@@ -210,6 +244,10 @@ static void _cuda_chain_hmm_backward(const Int32Pair *forward_transitions,
       inv_arbitrary_scale =
       this_alpha[num_hmm_states * num_sequences + s];
   double tot_variable_factor = 0.0;
+  int32_cuda max_src_state =
+    next_max_transitions[next_max_index[s] * num_sequences + s];
+  int32_cuda max_tgt_state = next_max_index[s];
+  next_max_index[s] = max_src_state;
 
   BaseFloat occupation_factor = this_alpha_prob / inv_arbitrary_scale;
   const DenominatorGraphTransition
@@ -237,6 +275,16 @@ static void _cuda_chain_hmm_backward(const Int32Pair *forward_transitions,
     BaseFloat occupation_prob1 = variable_factor1 * occupation_factor;
     atomic_add_thresholded(log_prob_deriv + (pdf_id1 * log_prob_deriv_stride + s),
                            occupation_prob1);
+    if(max_src_state == h) {
+      if(max_tgt_state == next_hmm_state0) {
+        atomic_add_thresholded(log_prob_deriv + (pdf_id0 * log_prob_deriv_stride + s),
+                           max_path_coefficient * occupation_prob0);
+      }
+      if(max_tgt_state == next_hmm_state1) {
+        atomic_add_thresholded(log_prob_deriv + (pdf_id1 * log_prob_deriv_stride + s),
+                           max_path_coefficient * occupation_prob1);
+      }
+    }
   }
   if (trans_iter != trans_end) {
     // mop up the odd transition.
@@ -250,6 +298,10 @@ static void _cuda_chain_hmm_backward(const Int32Pair *forward_transitions,
     BaseFloat occupation_prob0 = variable_factor0 * occupation_factor;
     atomic_add_thresholded(log_prob_deriv + (pdf_id0 * log_prob_deriv_stride + s),
                            occupation_prob0);
+    if(max_src_state == h && max_tgt_state == next_hmm_state0) {
+        atomic_add_thresholded(log_prob_deriv + (pdf_id0 * log_prob_deriv_stride + s),
+                           max_path_coefficient * occupation_prob0);
+    }
   }
   BaseFloat beta = tot_variable_factor / inv_arbitrary_scale;
   this_beta[h * num_sequences + s] = beta;
@@ -259,15 +311,19 @@ static void _cuda_chain_hmm_backward(const Int32Pair *forward_transitions,
 void cuda_chain_hmm_forward(dim3 Gr, dim3 Bl,
                             const Int32Pair *backward_transitions,
                             const DenominatorGraphTransition *transitions,
+                            int32_cuda *max_transitions,
                             int32_cuda num_sequences,
                             int32_cuda num_hmm_states,
                             const BaseFloat *probs, int32_cuda prob_stride,
                             const BaseFloat *prev_alpha,
-                            BaseFloat *this_alpha) {
+                            BaseFloat *this_alpha,
+                            const BaseFloat *prev_max_alpha,
+                            BaseFloat *this_max_alpha) {
   _cuda_chain_hmm_forward<<<Gr,Bl>>>(backward_transitions, transitions,
-                                     num_sequences, num_hmm_states,
-                                     probs, prob_stride,
-                                     prev_alpha, this_alpha);
+                                     max_transitions, num_sequences,
+                                     num_hmm_states, probs, prob_stride,
+                                     prev_alpha, this_alpha, prev_max_alpha,
+                                     this_max_alpha);
 }
 
 void cuda_chain_hmm_backward(dim3 Gr, dim3 Bl,
@@ -279,13 +335,17 @@ void cuda_chain_hmm_backward(dim3 Gr, dim3 Bl,
                              const BaseFloat *this_alpha, const BaseFloat *next_beta,
                              BaseFloat *this_beta,
                              BaseFloat *log_prob_deriv,
-                             int32_cuda log_prob_deriv_stride) {
+                             int32_cuda log_prob_deriv_stride,
+                             int32_cuda *next_max_index,
+                             const int32_cuda *next_max_transitions,
+                             BaseFloat max_path_coefficient) {
   _cuda_chain_hmm_backward<<<Gr,Bl>>>(forward_transitions, transitions,
                                       num_sequences, num_hmm_states,
                                       probs, prob_stride,
                                       this_alpha, next_beta,
                                       this_beta, log_prob_deriv,
-                                      log_prob_deriv_stride);
+                                      log_prob_deriv_stride, next_max_index,
+                                      next_max_transitions, max_path_coefficient);
 }
 
 

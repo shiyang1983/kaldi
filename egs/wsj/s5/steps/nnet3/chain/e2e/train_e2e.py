@@ -79,6 +79,9 @@ def get_args():
     parser.add_argument("--chain.leaky-hmm-coefficient", type=float,
                         dest='leaky_hmm_coefficient', default=0.00001,
                         help="")
+    parser.add_argument("--chain.max-path-coefficient", type=float,
+                        dest='max_path_coefficient', default=0.00001,
+                        help="")
     parser.add_argument("--chain.apply-deriv-weights", type=str,
                         dest='apply_deriv_weights', default=True,
                         action=common_lib.StrToBoolAction,
@@ -480,6 +483,7 @@ def train(args, run_opts):
                 l2_regularize=args.l2_regularize,
                 xent_regularize=args.xent_regularize,
                 leaky_hmm_coefficient=args.leaky_hmm_coefficient,
+                max_path_coefficient=args.max_path_coefficient,
                 momentum=args.momentum,
                 max_param_change=args.max_param_change,
                 shuffle_buffer_size=args.shuffle_buffer_size,

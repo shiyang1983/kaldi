@@ -36,6 +36,7 @@
 #include "cudamatrix/cu-array.h"
 #include "chain/chain-den-graph.h"
 #include "chain/chain-training.h"
+#include "chain/chain-datastruct.h"
 
 namespace kaldi {
 namespace chain {
@@ -233,6 +234,8 @@ class DenominatorComputation {
 
   // sets up the alpha for frame t = 0.
   void AlphaFirstFrame();
+  void MaxAlphaFirstFrame();
+
   // the alpha computation for some 0 < t <= num_time_steps_.
   void AlphaGeneralFrame(int32 t);
   // does the 'alpha-dash' computation for time t.  this relates to
@@ -283,6 +286,14 @@ class DenominatorComputation {
   // are for the alpha-sums, which relates to leaky HMM.
   CuMatrix<BaseFloat> alpha_;
 
+  // the (temporarily) alpha and (more permanently) alpha-dash probabilities;
+  // dimension is (frames_per_sequence + 1) by (num-hmm-states * num-sequences +
+  // num_sequences).  Note, they are not logs.  The last 'num_sequences'
+  // columns, where the alpha for the state indexed 'num_hmm_states' would live,
+  // are for the alpha-sums, which relates to leaky HMM.
+  CuMatrix<BaseFloat> max_alpha_;
+
+
   // the beta (also beta-dash) probabilities (rolling buffer); dimension is 2 *
   // (num-hmm-states * num-sequences + num_sequences).  [the last
   // 'num_sequences' columns are for the beta-sums, which relates to leaky HMM.]
@@ -306,6 +317,10 @@ class DenominatorComputation {
   // betas by in order to keep them in a good dynamic range.  The product of
   // them must be included in the total likelihood.
   CuVector<BaseFloat> log_correction_term_;
+
+  // the transitions of the max path in denominator graph
+  CuArray<int32> max_transitions_;
+  CuArray<int32> max_index_;
 
   bool ok_;
 };

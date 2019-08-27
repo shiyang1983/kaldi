@@ -36,17 +36,23 @@ extern "C" {
                                const BaseFloat *next_beta,
                                BaseFloat *this_beta,
                                BaseFloat *log_prob_deriv,
-                               int32_cuda log_prob_deriv_stride);
+                               int32_cuda log_prob_deriv_stride,
+                               int32_cuda* next_max_index,
+                               const int32_cuda* next_max_transitions,
+                               BaseFloat max_path_coefficient);
 
   void cuda_chain_hmm_forward(dim3 Gr, dim3 Bl,
                               const Int32Pair *backward_transitions,
                               const DenominatorGraphTransition *transitions,
+                              int32_cuda *max_transitions,
                               int32_cuda num_sequences,
                               int32_cuda num_hmm_states,
                               const BaseFloat *probs,
                               int32_cuda prob_stride,
                               const BaseFloat *prev_alpha,
-                              BaseFloat *this_alpha);
+                              BaseFloat *this_alpha,
+                              const BaseFloat *prev_max_alpha_dash,
+                              BaseFloat *this_max_alpha);
 
   void cuda_penalize_out_of_range(dim3 Gr, dim3 Bl, BaseFloat limit,
                                   BaseFloat scale, const BaseFloat *in_data,
